@@ -1,6 +1,5 @@
 const express = require("express");
 const cors = require("cors");
-// ✅ REQUIRED (Node < 18)
 
 const app = express();
 const sessions = {};
@@ -9,17 +8,74 @@ app.use(cors());
 app.use(express.json());
 
 // ---------------- DATA ----------------
+
+// 🔥 FULL TOPIC → SUBTOPIC → AI MAPPING
 const subtopicDetails = {
   1: {
+    101: {
+      id: 101,
+      name: "Array Basics",
+      systemPrompt:
+        "You are an expert DSA tutor teaching array basics like traversal, insertion, deletion with simple examples.",
+    },
+    102: {
+      id: 102,
+      name: "Two Pointer",
+      systemPrompt:
+        "You are an expert DSA tutor specializing in two pointer technique with step-by-step explanation.",
+    },
     103: {
       id: 103,
       name: "Sliding Window",
       systemPrompt:
-        "You are an expert DSA tutor specializing in Sliding Window problems.",
+        "You are an expert DSA tutor specializing in sliding window problems.",
+    },
+  },
+
+  2: {
+    201: {
+      id: 201,
+      name: "String Basics",
+      systemPrompt:
+        "You are an expert DSA tutor teaching string operations and manipulation.",
+    },
+    202: {
+      id: 202,
+      name: "Palindrome",
+      systemPrompt:
+        "You are an expert DSA tutor teaching palindrome problems with logic and examples.",
+    },
+    203: {
+      id: 203,
+      name: "Anagrams",
+      systemPrompt:
+        "You are an expert DSA tutor teaching anagram problems and frequency counting techniques.",
+    },
+  },
+
+  3: {
+    301: {
+      id: 301,
+      name: "Linked List Basics",
+      systemPrompt:
+        "You are an expert DSA tutor teaching linked list basics.",
+    },
+    302: {
+      id: 302,
+      name: "Reversal",
+      systemPrompt:
+        "You are an expert DSA tutor teaching linked list reversal techniques.",
+    },
+    303: {
+      id: 303,
+      name: "Cycle Detection",
+      systemPrompt:
+        "You are an expert DSA tutor teaching cycle detection using Floyd’s algorithm.",
     },
   },
 };
 
+// 🔥 STEP FLOW
 const steps = [
   "Intuition",
   "Brute Force",
@@ -56,6 +112,12 @@ app.get("/api/subtopics/:topicId", (req, res) => {
     2: [
       { id: 201, name: "String Basics" },
       { id: 202, name: "Palindrome" },
+      { id: 203, name: "Anagrams" },
+    ],
+    3: [
+      { id: 301, name: "Basics" },
+      { id: 302, name: "Reversal" },
+      { id: 303, name: "Cycle Detection" },
     ],
   };
 
@@ -91,13 +153,11 @@ app.get("/api/topics/:topicId/subtopics/:subtopicId", async (req, res) => {
 
   const session = sessions[sessionId];
 
-  // ✅ FIX: session validation
   if (!session) {
     return res.status(404).json({ error: "Session not found" });
   }
 
-  const stepIndex = session.currentStep;
-  const currentStep = steps[stepIndex] || steps[0]; // ✅ safety
+  const currentStep = steps[session.currentStep] || steps[0];
 
   try {
     const prompt = `
@@ -109,9 +169,8 @@ CURRENT STEP: ${currentStep}
 
 INSTRUCTIONS:
 - Teach ONLY this step
-- Do NOT explain other steps
-- Keep explanation simple and structured
-- Use examples if needed
+- Keep explanation simple
+- Use examples
 - End with: "Say NEXT to continue"
 `;
 
@@ -123,11 +182,7 @@ INSTRUCTIONS:
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          contents: [
-            {
-              parts: [{ text: prompt }],
-            },
-          ],
+          contents: [{ parts: [{ text: prompt }] }],
         }),
       }
     );
@@ -167,42 +222,31 @@ app.post("/api/chat", async (req, res) => {
     return res.status(404).json({ error: "Subtopic not found" });
   }
 
-  // ---------------- NEXT ----------------
+  // NEXT STEP
   if (message.trim().toLowerCase() === "next") {
     if (session.currentStep < steps.length - 1) {
       session.currentStep++;
     }
 
-    const currentStep = steps[session.currentStep] || steps[0];
+    const currentStep = steps[session.currentStep];
 
     try {
       const prompt = `
 ${data.systemPrompt}
 
-You are teaching: ${data.name}
-
 CURRENT STEP: ${currentStep}
 
-INSTRUCTIONS:
-- Teach ONLY this step
-- Do NOT explain other steps
-- Keep explanation simple
-- End with: "Say NEXT to continue"
+Teach ONLY this step.
+End with "Say NEXT to continue"
 `;
 
       const response = await fetch(
         `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
         {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            contents: [
-              {
-                parts: [{ text: prompt }],
-              },
-            ],
+            contents: [{ parts: [{ text: prompt }] }],
           }),
         }
       );
@@ -215,17 +259,14 @@ INSTRUCTIONS:
 
       session.history.push({ role: "ai", content: reply });
 
-      return res.json({
-        step: currentStep,
-        reply,
-      });
+      return res.json({ step: currentStep, reply });
     } catch (error) {
       console.error("AI ERROR:", error);
       return res.status(500).json({ error: "AI error" });
     }
   }
 
-  // ---------------- NORMAL CHAT ----------------
+  // NORMAL CHAT
   try {
     let conversation = `${data.systemPrompt}\n\n`;
 
@@ -241,15 +282,9 @@ INSTRUCTIONS:
       `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          contents: [
-            {
-              parts: [{ text: conversation }],
-            },
-          ],
+          contents: [{ parts: [{ text: conversation }] }],
         }),
       }
     );
