@@ -1,0 +1,88 @@
+.tutor-container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.chat-area {
+  flex: 1;
+  overflow-y: auto;
+
+  margin-top: 110px;
+  margin-bottom: 60px; /* space for input */
+
+  padding: 10px;
+  background: #f5f5f5;
+}
+
+.input-area {
+  position: fixed;   /* 🔥 */
+  bottom: 0;
+  left: 0;
+  width: 100%;
+
+  display: flex;
+  padding: 10px;
+  border-top: 1px solid #ccc;
+  background: white;
+}
+/* Message rows */
+.message-row {
+  display: flex;
+  margin-bottom: 10px;
+}
+
+.message-row.user {
+  justify-content: flex-end;
+}
+
+.message-row.ai {
+  justify-content: flex-start;
+}
+
+/* Message bubbles */
+.message-bubble {
+  padding: 10px 15px;
+  border-radius: 15px;
+  max-width: 60%;
+}
+
+.message-bubble.user {
+  background: #007bff;
+  color: white;
+}
+
+.message-bubble.ai {
+  background: #e5e5ea;
+  color: black;
+}
+
+.tabs {
+  position: fixed;   /* 🔥 important */
+  top: 60px;         /* height of header */
+  left: 0;
+  width: 100%;
+  z-index: 999;
+
+  display: flex;
+  border-bottom: 1px solid #ccc;
+  background: white;
+}
+
+.tabs button {
+  padding: 10px 15px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.tabs button:hover {
+  background: #f0f0f0;
+}
+
+.tabs button.active {
+  border-bottom: 3px solid #007bff;
+  color: #007bff;
+  font-weight: bold;
+}
