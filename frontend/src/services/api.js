@@ -50,8 +50,42 @@ export const getSessionQuiz = async (sessionId, mode = "step", count = 1) => {
   return res.json();
 };
 
-export const getTopicQuizSets = async (topicId, sets = 3, count = 5) => {
-  const res = await fetch(`${BASE_URL}/api/quiz/topic/${topicId}/sets?sets=${sets}&count=${count}`);
+export const getSessionQuizHistory = async (sessionId) => {
+  const res = await fetch(`${BASE_URL}/api/quiz/session/${sessionId}/history`);
+  return res.json();
+};
+
+export const saveSessionQuizHistory = async (sessionId, payload) => {
+  const res = await fetch(`${BASE_URL}/api/quiz/session/${sessionId}/history`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+  return res.json();
+};
+
+export const getTopicQuizSets = async (topicId, sets = 3, count = 5, refresh = false) => {
+  const res = await fetch(
+    `${BASE_URL}/api/quiz/topic/${topicId}/sets?sets=${sets}&count=${count}&refresh=${refresh ? 1 : 0}`
+  );
+  return res.json();
+};
+
+export const getTopicQuizHistory = async (topicId) => {
+  const res = await fetch(`${BASE_URL}/api/quiz/topic/${topicId}/history`);
+  return res.json();
+};
+
+export const saveTopicQuizHistory = async (topicId, payload) => {
+  const res = await fetch(`${BASE_URL}/api/quiz/topic/${topicId}/history`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
   return res.json();
 };
 

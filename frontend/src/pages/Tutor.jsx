@@ -1,5 +1,5 @@
 import { useLocation, useNavigate, useParams } from "react-router-dom";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getTeaching, sendMessage } from "../services/api";
 
 import Problems from "../components/Problems";
@@ -24,11 +24,34 @@ function Tutor() {
 
   useEffect(() => {
     let mounted = true;
-    setLoading(true);
 
-    getTeaching(topicId, subtopicId, sessionId)
-      .then((data) => {
+    const loadInitialTeaching = async () => {
+      setLoading(true);
+
+      try {
+        const data = await getTeaching(topicId, subtopicId, sessionId);
         if (!mounted) return;
+
+        const badInitialReply =
+          !data?.reply ||
+          data.reply === "API failed" ||
+          data.reply === "Server error" ||
+          data.reply === "AI failed";
+
+        if (badInitialReply) {
+          const retryData = await sendMessage("__start__", sessionId);
+          if (!mounted) return;
+
+          setMessages([
+            {
+              type: "ai",
+              step: retryData?.step || data?.step,
+              text: retryData?.reply || "Failed to load teaching content.",
+            },
+          ]);
+          return;
+        }
+
         setMessages([
           {
             type: "ai",
@@ -36,16 +59,17 @@ function Tutor() {
             text: data.reply,
           },
         ]);
-      })
-      .catch(() => {
+      } catch {
         if (!mounted) return;
-        setMessages([{ type: "ai", text: "⚠️ Failed to load teaching content." }]);
-      })
-      .finally(() => {
+        setMessages([{ type: "ai", text: "Failed to load teaching content." }]);
+      } finally {
         if (mounted) {
           setLoading(false);
         }
-      });
+      }
+    };
+
+    loadInitialTeaching();
 
     return () => {
       mounted = false;
@@ -69,11 +93,11 @@ function Tutor() {
         {
           type: "ai",
           step: data.step,
-          text: data.reply || "⚠️ No response",
+          text: data.reply || "No response",
         },
       ]);
     } catch {
-      setMessages((prev) => [...prev, { type: "ai", text: "⚠️ Failed to load next step" }]);
+      setMessages((prev) => [...prev, { type: "ai", text: "Failed to load next step" }]);
     }
 
     setLoading(false);
@@ -91,17 +115,9 @@ function Tutor() {
 
     try {
       const data = await sendMessage(userMessage, sessionId);
-
-      if (data.reply && !data.reply.includes("API failed")) {
-        setMessages((prev) => [...prev, { type: "ai", text: data.reply }]);
-      } else {
-        setMessages((prev) => [...prev, { type: "ai", text: "⏳ AI busy, try again in few seconds." }]);
-      }
+      setMessages((prev) => [...prev, { type: "ai", text: data.reply || "No response" }]);
     } catch {
-      setMessages((prev) => [
-        ...prev,
-        { type: "ai", text: "⚠️ Network issue" },
-      ]);
+      setMessages((prev) => [...prev, { type: "ai", text: "Network issue" }]);
     }
 
     setLoading(false);

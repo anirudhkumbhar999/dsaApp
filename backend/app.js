@@ -3,6 +3,10 @@ const cors = require("cors");
 
 const app = express();
 const sessions = {};
+const topicQuizAttempts = {};
+const sessionQuizAttempts = {};
+const topicQuizSetsCache = {};
+const topicQuizQuestionBank = {};
 
 app.use(cors());
 app.use(express.json());
@@ -71,6 +75,32 @@ const buildFallbackQuiz = ({ title, count = 5, scope = "general" }) => {
   };
 };
 
+const buildTutorFallbackReply = ({ topicName, currentStep, userMessage = "" }) => {
+  const normalizedStep = currentStep || "Intuition";
+  const followUp = userMessage && userMessage.trim()
+    ? `You asked: "${userMessage}". Based on the current lesson, revise the main idea first and then continue.`
+    : "Start with the main idea, then move to one simple example.";
+
+  const stepGuides = {
+    Intuition: `Focus on why ${topicName} needs this technique, what pattern to notice, and when to use it.`,
+    "Brute Force": `Start from the simplest correct approach for ${topicName}, even if it is slower.`,
+    Optimized: `Now compare the brute-force method with a faster method and explain what improves.`,
+    Patterns: `Identify the repeated interview pattern in ${topicName} and the signals that reveal it.`,
+    Code: `Write the core logic step by step for ${topicName} and explain each important line.`,
+    Practice: `Summarize the common variations, edge cases, and what to practice next for ${topicName}.`,
+  };
+
+  return [
+    `${normalizedStep}: ${stepGuides[normalizedStep] || `Continue learning ${topicName} step by step.`}`,
+    "",
+    followUp,
+    "",
+    `Example direction: take one small ${topicName} problem, solve it manually, then explain how this step helps.`,
+    "",
+    'Say NEXT to continue',
+  ].join("\n");
+};
+
 const safeParseQuiz = (text) => {
   if (!text || typeof text !== "string") return null;
   try {
@@ -98,37 +128,219 @@ const validateQuizShape = (quiz) => {
   return true;
 };
 
-const callGeminiText = async (prompt) => {
-  const response = await fetch(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [{ parts: [{ text: prompt }] }],
-      }),
-    }
-  );
-
-  if (!response.ok) {
-    return { ok: false, text: "", error: "API failed" };
-  }
-
-  const aiData = await response.json();
-  if (aiData.error?.code === 429) {
-    return { ok: false, text: "", error: "RATE_LIMIT" };
-  }
-
-  const text = aiData?.candidates?.[0]?.content?.parts?.[0]?.text || "";
-  return { ok: true, text };
+const normalizeQuestionText = (value) => {
+  return String(value || "")
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
 };
 
-const generateTopicQuiz = async ({ topicName, count = 5, focus = "mixed" }) => {
+const dedupeQuizQuestions = (questions = []) => {
+  const seen = new Set();
+  const unique = [];
+
+  for (const question of questions) {
+    const normalized = normalizeQuestionText(question?.question);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    unique.push(question);
+  }
+
+  return unique;
+};
+
+const ensureQuizQuestions = (quiz, { count, scope, title }) => {
+  if (!quiz || typeof quiz !== "object") return null;
+
+  const desiredCount = Math.max(1, Number(count) || 1);
+  const uniqueQuestions = dedupeQuizQuestions(Array.isArray(quiz.questions) ? quiz.questions : []);
+  const questions = uniqueQuestions.slice(0, desiredCount).map((question, index) => ({
+    ...question,
+    id: question?.id || `${scope}-${index + 1}`,
+  }));
+
+  if (questions.length < desiredCount) {
+    const fallback = buildFallbackQuiz({ title, count: desiredCount, scope });
+    const topUp = dedupeQuizQuestions([
+      ...questions,
+      ...fallback.questions,
+    ]).slice(0, desiredCount).map((question, index) => ({
+      ...question,
+      id: question?.id || `${scope}-${index + 1}`,
+    }));
+
+    return {
+      ...quiz,
+      quizId: quiz.quizId || `${scope}-${Date.now()}`,
+      quizTitle: quiz.quizTitle || title,
+      scope: quiz.scope || scope,
+      questions: topUp,
+    };
+  }
+
+  return {
+    ...quiz,
+    quizId: quiz.quizId || `${scope}-${Date.now()}`,
+    quizTitle: quiz.quizTitle || title,
+    scope: quiz.scope || scope,
+    questions,
+  };
+};
+
+const callGeminiText = async ({ systemPrompt = "", userPrompt }) => {
+  if (!process.env.GEMINI_API_KEY) {
+    return { ok: false, text: "", error: "MISSING_API_KEY", provider: "gemini" };
+  }
+
+  try {
+    const payload = {
+      contents: [{ parts: [{ text: userPrompt }] }],
+    };
+
+    if (systemPrompt && systemPrompt.trim()) {
+      payload.systemInstruction = {
+        parts: [{ text: systemPrompt }],
+      };
+    }
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${process.env.GEMINI_MODEL || "gemini-2.5-flash"}:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      }
+    );
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Gemini API error:", response.status, errorText);
+      if (response.status === 429) {
+        return { ok: false, text: "", error: "RATE_LIMIT", provider: "gemini" };
+      }
+      return { ok: false, text: "", error: "API_FAILED", provider: "gemini" };
+    }
+
+    const data = await response.json();
+    if (data?.error?.code === 429) {
+      return { ok: false, text: "", error: "RATE_LIMIT", provider: "gemini" };
+    }
+
+    const text = data?.candidates?.[0]?.content?.parts?.[0]?.text || "";
+    if (!text.trim()) {
+      return { ok: false, text: "", error: "EMPTY_RESPONSE", provider: "gemini" };
+    }
+
+    return { ok: true, text, provider: "gemini" };
+  } catch (error) {
+    console.error("Gemini network error:", error?.message || error);
+    return { ok: false, text: "", error: "NETWORK_ERROR", provider: "gemini" };
+  }
+};
+
+const callGroqText = async ({ systemPrompt = "", userPrompt }) => {
+  if (!process.env.GROQ_API_KEY) {
+    return { ok: false, text: "", error: "MISSING_API_KEY", provider: "groq" };
+  }
+
+  try {
+    const messages = [];
+    if (systemPrompt && systemPrompt.trim()) {
+      messages.push({ role: "system", content: systemPrompt });
+    }
+    messages.push({ role: "user", content: userPrompt });
+
+    const response = await fetch("https://api.groq.com/openai/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+      },
+      body: JSON.stringify({
+        model: process.env.GROQ_MODEL || "llama-3.3-70b-versatile",
+        temperature: 0.4,
+        messages,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Groq API error:", response.status, errorText);
+      if (response.status === 429) {
+        return { ok: false, text: "", error: "RATE_LIMIT", provider: "groq" };
+      }
+      return { ok: false, text: "", error: "API_FAILED", provider: "groq" };
+    }
+
+    const data = await response.json();
+    if (data?.error?.code === 429 || data?.error?.type === "rate_limit_exceeded") {
+      return { ok: false, text: "", error: "RATE_LIMIT", provider: "groq" };
+    }
+
+    const text = data?.choices?.[0]?.message?.content || "";
+    if (!text.trim()) {
+      return { ok: false, text: "", error: "EMPTY_RESPONSE", provider: "groq" };
+    }
+
+    return { ok: true, text, provider: "groq" };
+  } catch (error) {
+    console.error("Groq network error:", error?.message || error);
+    return { ok: false, text: "", error: "NETWORK_ERROR", provider: "groq" };
+  }
+};
+
+const callAiText = async ({ systemPrompt = "", userPrompt }) => {
+  const attempts = [];
+
+  if (process.env.GROQ_API_KEY) {
+    const groqResult = await callGroqText({ systemPrompt, userPrompt });
+    if (groqResult.ok) return groqResult;
+    attempts.push(groqResult);
+  }
+
+  if (process.env.GEMINI_API_KEY) {
+    const geminiResult = await callGeminiText({ systemPrompt, userPrompt });
+    if (geminiResult.ok) return geminiResult;
+    attempts.push(geminiResult);
+  }
+
+  const finalAttempt = attempts[attempts.length - 1] || {
+    ok: false,
+    text: "",
+    error: "NO_PROVIDER_CONFIGURED",
+    provider: "none",
+  };
+
+  return {
+    ok: false,
+    text: "",
+    error: finalAttempt.error,
+    provider: finalAttempt.provider,
+    attempts,
+  };
+};
+
+const generateTopicQuiz = async ({
+  topicName,
+  count = 5,
+  focus = "mixed",
+  subtopicName = "",
+  avoidQuestions = [],
+}) => {
+  const avoidList = avoidQuestions
+    .map((question, index) => `${index + 1}. ${question}`)
+    .join("\n");
+
   const prompt = `
 Generate a multiple choice DSA quiz in strict JSON only.
 Topic: ${topicName}
+${subtopicName ? `Primary subtopic focus: ${subtopicName}` : ""}
 Question count: ${Math.max(3, Math.min(Number(count) || 5, 10))}
 Focus area: ${focus}
+
+Previously generated question ideas to avoid repeating:
+${avoidList || "None"}
 
 Return JSON object with this exact shape:
 {
@@ -149,21 +361,63 @@ Return JSON object with this exact shape:
 
 Rules:
 - focus on the requested focus area
+- if a primary subtopic is provided, most questions must come from that subtopic
 - cover different points within the topic
 - keep difficulty mixed: easy, medium, hard
+- every question must test a different concept or scenario
+- do not repeat the same question idea with rewording
+- do not reuse any previously generated question idea from the avoid list
 - no markdown, no extra text, JSON only
 `;
 
-  const result = await callGeminiText(prompt);
+  const result = await callAiText({
+    systemPrompt: "You are a precise DSA quiz generator. Return valid JSON only when requested.",
+    userPrompt: prompt,
+  });
   if (!result.ok) return null;
   const parsed = safeParseQuiz(result.text);
   if (!validateQuizShape(parsed)) return null;
-  return parsed;
+  return ensureQuizQuestions(parsed, {
+    count,
+    scope: "dashboard-topic",
+    title: subtopicName ? `${topicName} - ${subtopicName} Quiz` : `${topicName} Quiz`,
+  });
+};
+
+const extractQuizQuestionBank = (sets = []) => {
+  return sets.flatMap((entry) =>
+    (entry?.quiz?.questions || []).map((question) => normalizeQuestionText(question?.question)).filter(Boolean)
+  );
+};
+
+const buildTutorReply = async ({ systemPrompt, topicName, currentStep, historyWindow = "", userMessage = "" }) => {
+  const prompt = `
+You are a professional DSA tutor.
+Topic: ${topicName}
+Current step: ${currentStep}
+
+Recent conversation:
+${historyWindow || "No previous context"}
+
+User message:
+${userMessage || "Start teaching this step clearly with one simple example."}
+
+Rules:
+- teach clearly and progressively
+- keep the response relevant to the current step
+- use one compact example when useful
+- end with "Say NEXT to continue"
+`;
+
+  return callAiText({
+    systemPrompt,
+    userPrompt: prompt,
+  });
 };
 
 // ---------------- TEST ----------------
 app.get("/", (req, res) => {
-  res.send("Backend running 🚀");
+  res.send("Backend running");
 });
 
 // ---------------- TOPICS ----------------
@@ -210,47 +464,30 @@ app.get("/api/topics/:topicId/subtopics/:subtopicId", async (req, res) => {
   const currentStep = steps[session.currentStep];
 
   try {
-    const prompt = `
-You are a professional DSA tutor.
-Topic: ${data.name}
-Step: ${currentStep}
-Explain clearly with example.
-End with "Say NEXT to continue"
-`;
+    const historyWindow = session.history.slice(-12).map((entry) => `${entry.role}: ${entry.content}`).join("\n");
 
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: prompt }] }],
-        }),
-      }
-    );
+    const result = await buildTutorReply({
+      systemPrompt: data.systemPrompt,
+      topicName: data.name,
+      currentStep,
+      historyWindow,
+      userMessage: "Start the lesson from the current step without skipping ahead.",
+    });
 
-    if (!response.ok) {
-      return res.json({ step: currentStep, reply: "⚠️ API failed" });
-    }
-
-    const aiData = await response.json();
-
-    if (aiData.error?.code === 429) {
+    if (!result.ok) {
+      console.error("Tutor teaching failed:", result);
       return res.json({
         step: currentStep,
-        reply: "⏳ Rate limit reached. Wait 30–60 sec.",
+        reply: buildTutorFallbackReply({ topicName: data.name, currentStep }),
       });
     }
 
-    let reply =
-      aiData?.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "⚠️ AI failed";
-
+    const reply = result.text || "AI failed";
     session.history.push({ role: "ai", content: reply });
 
     res.json({ step: currentStep, reply });
   } catch {
-    res.json({ step: currentStep, reply: "⚠️ Server error" });
+    res.json({ step: currentStep, reply: "Server error" });
   }
 });
 
@@ -267,64 +504,97 @@ app.post("/api/chat", async (req, res) => {
   const data = subtopicDetails[topic]?.[subtopic];
   if (!data) return res.status(404).json({ error: "Subtopic not found" });
 
-  // NEXT
-  if (message.toLowerCase() === "next") {
-    if (session.currentStep < steps.length - 1) session.currentStep++;
-
+  if (message.toLowerCase() === "__start__") {
     const currentStep = steps[session.currentStep];
+    const historyWindow = session.history.slice(-12).map((entry) => `${entry.role}: ${entry.content}`).join("\n");
 
     try {
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: `${data.systemPrompt}\nStep: ${currentStep}` }] }],
-          }),
-        }
-      );
+      const result = await buildTutorReply({
+        systemPrompt: data.systemPrompt,
+        topicName: data.name,
+        currentStep,
+        historyWindow,
+        userMessage: "Start the lesson from the current step without skipping ahead.",
+      });
 
-      if (!response.ok) {
-        return res.json({ step: currentStep, reply: "⚠️ API failed" });
+      if (!result.ok) {
+        console.error("Tutor START failed:", result);
+        const reply = buildTutorFallbackReply({
+          topicName: data.name,
+          currentStep,
+          userMessage: "Start the lesson from the current step without skipping ahead.",
+        });
+        return res.json({ step: currentStep, reply });
       }
 
-      const aiData = await response.json();
-
-      let reply =
-        aiData?.candidates?.[0]?.content?.parts?.[0]?.text ||
-        "⚠️ AI failed";
-
+      const reply = result.text || buildTutorFallbackReply({ topicName: data.name, currentStep });
       session.history.push({ role: "ai", content: reply });
 
       return res.json({ step: currentStep, reply });
     } catch {
-      return res.json({ step: currentStep, reply: "⚠️ Server error" });
+      return res.json({
+        step: currentStep,
+        reply: buildTutorFallbackReply({ topicName: data.name, currentStep }),
+      });
     }
   }
 
-  // NORMAL CHAT
-  try {
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: message }] }],
-        }),
-      }
-    );
+  if (message.toLowerCase() === "next") {
+    if (session.currentStep < steps.length - 1) session.currentStep++;
 
-    if (!response.ok) {
-      return res.json({ reply: "⚠️ API failed" });
+    const currentStep = steps[session.currentStep];
+    const historyWindow = session.history.slice(-12).map((entry) => `${entry.role}: ${entry.content}`).join("\n");
+
+    try {
+      const result = await buildTutorReply({
+        systemPrompt: data.systemPrompt,
+        topicName: data.name,
+        currentStep,
+        historyWindow,
+        userMessage: "Continue to the next teaching step.",
+      });
+
+      if (!result.ok) {
+        console.error("Tutor NEXT failed:", result);
+        const reply = buildTutorFallbackReply({
+          topicName: data.name,
+          currentStep,
+          userMessage: "Continue to the next teaching step.",
+        });
+        return res.json({ step: currentStep, reply });
+      }
+
+      const reply = result.text || "AI failed";
+      session.history.push({ role: "ai", content: reply });
+
+      return res.json({ step: currentStep, reply });
+    } catch {
+      return res.json({ step: currentStep, reply: "Server error" });
+    }
+  }
+
+  try {
+    const historyWindow = session.history.slice(-12).map((entry) => `${entry.role}: ${entry.content}`).join("\n");
+
+    const result = await buildTutorReply({
+      systemPrompt: data.systemPrompt,
+      topicName: data.name,
+      currentStep: steps[session.currentStep],
+      historyWindow,
+      userMessage: message,
+    });
+
+    if (!result.ok) {
+      console.error("Tutor chat failed:", result);
+      const reply = buildTutorFallbackReply({
+        topicName: data.name,
+        currentStep: steps[session.currentStep],
+        userMessage: message,
+      });
+      return res.json({ reply });
     }
 
-    const aiData = await response.json();
-
-    let reply =
-      aiData?.candidates?.[0]?.content?.parts?.[0]?.text ||
-      "⚠️ AI failed";
+    const reply = result.text || "AI failed";
 
     session.history.push(
       { role: "user", content: message },
@@ -333,7 +603,7 @@ app.post("/api/chat", async (req, res) => {
 
     res.json({ reply });
   } catch {
-    res.json({ reply: "⚠️ Server error" });
+    res.json({ reply: "Server error" });
   }
 });
 
@@ -361,11 +631,19 @@ app.get("/api/quiz/dashboard", async (req, res) => {
 // ---------------- QUIZ SETS (UNIVERSAL TOPIC PAGE) ----------------
 app.get("/api/quiz/topic/:topicId/sets", async (req, res) => {
   const { topicId } = req.params;
-  const { sets = 3, count = 5 } = req.query;
+  const { sets = 3, count = 5, refresh = "0" } = req.query;
   const topic = topicsData.find((t) => String(t.id) === String(topicId));
   if (!topic) return res.status(404).json({ error: "Topic not found" });
 
-  const setCount = Math.max(1, Math.min(Number(sets) || 3, 6));
+  const cacheKey = String(topicId);
+  const shouldRefresh = String(refresh) === "1";
+
+  if (!shouldRefresh && topicQuizSetsCache[cacheKey]) {
+    return res.json(topicQuizSetsCache[cacheKey]);
+  }
+
+  const topicSubtopics = subtopicsData[topic.id] || [];
+  const setCount = Math.max(1, Math.min(Number(sets) || topicSubtopics.length || 3, 6));
   const focusAreas = [
     "fundamentals and definitions",
     "problem solving patterns",
@@ -376,18 +654,29 @@ app.get("/api/quiz/topic/:topicId/sets", async (req, res) => {
   ];
 
   const quizSets = [];
+  const previousQuestionBank = topicQuizQuestionBank[cacheKey] || [];
+  const newQuestionBank = [...previousQuestionBank];
 
   for (let i = 0; i < setCount; i++) {
-    const focus = focusAreas[i % focusAreas.length];
+    const subtopic = topicSubtopics[i % Math.max(topicSubtopics.length, 1)] || null;
+    const focus = subtopic
+      ? `subtopic: ${subtopic.name}; emphasis: ${focusAreas[i % focusAreas.length]}`
+      : focusAreas[i % focusAreas.length];
     let quiz = null;
     try {
-      quiz = await generateTopicQuiz({ topicName: topic.name, count, focus });
+      quiz = await generateTopicQuiz({
+        topicName: topic.name,
+        count,
+        focus,
+        subtopicName: subtopic?.name || "",
+        avoidQuestions: newQuestionBank,
+      });
     } catch {
       quiz = null;
     }
     if (!quiz) {
       quiz = buildFallbackQuiz({
-        title: `${topic.name} Quiz Set ${i + 1}`,
+        title: subtopic ? `${topic.name} - ${subtopic.name} Quiz` : `${topic.name} Quiz Set ${i + 1}`,
         count,
         scope: "topic-set",
       });
@@ -398,16 +687,115 @@ app.get("/api/quiz/topic/:topicId/sets", async (req, res) => {
       id: `set-${i + 1}`,
       topicId: topic.id,
       topicName: topic.name,
+      subtopicId: subtopic?.id || null,
+      subtopicName: subtopic?.name || null,
       focus,
       quiz,
     });
+
+    newQuestionBank.push(
+      ...((quiz?.questions || []).map((question) => normalizeQuestionText(question?.question)).filter(Boolean))
+    );
   }
 
-  return res.json({
+  const payload = {
     topicId: topic.id,
     topicName: topic.name,
     sets: quizSets,
+  };
+
+  topicQuizSetsCache[cacheKey] = payload;
+  topicQuizQuestionBank[cacheKey] = Array.from(new Set(newQuestionBank)).slice(-500);
+
+  return res.json(payload);
+});
+
+// ---------------- QUIZ HISTORY (UNIVERSAL TOPIC PAGE, IN-MEMORY) ----------------
+app.get("/api/quiz/topic/:topicId/history", (req, res) => {
+  const { topicId } = req.params;
+  res.json({
+    topicId: Number(topicId),
+    attempts: topicQuizAttempts[String(topicId)] || [],
   });
+});
+
+app.post("/api/quiz/topic/:topicId/history", (req, res) => {
+  const { topicId } = req.params;
+  const {
+    quizId,
+    quizTitle,
+    subtopicId = null,
+    subtopicName = "",
+    score,
+    total,
+    passed,
+  } = req.body || {};
+
+  if (!quizId || !quizTitle || typeof score !== "number" || typeof total !== "number") {
+    return res.status(400).json({ error: "Invalid quiz attempt payload" });
+  }
+
+  const key = String(topicId);
+  const nextAttempt = {
+    quizId,
+    quizTitle,
+    topicId: Number(topicId),
+    subtopicId,
+    subtopicName,
+    score,
+    total,
+    passed: typeof passed === "boolean" ? passed : score >= Math.ceil(total * 0.6),
+    at: new Date().toISOString(),
+  };
+
+  topicQuizAttempts[key] = [nextAttempt, ...(topicQuizAttempts[key] || []).filter((item) => item.quizId !== quizId)].slice(0, 20);
+
+  return res.status(201).json(nextAttempt);
+});
+
+// ---------------- QUIZ HISTORY (SESSION CONTEXT, IN-MEMORY) ----------------
+app.get("/api/quiz/session/:sessionId/history", (req, res) => {
+  const { sessionId } = req.params;
+  res.json({
+    sessionId,
+    attempts: sessionQuizAttempts[sessionId] || [],
+  });
+});
+
+app.post("/api/quiz/session/:sessionId/history", (req, res) => {
+  const { sessionId } = req.params;
+  const {
+    quizId,
+    quizTitle,
+    mode,
+    step = "",
+    score,
+    total,
+    passed,
+  } = req.body || {};
+
+  if (!quizId || !quizTitle || !mode || typeof score !== "number" || typeof total !== "number") {
+    return res.status(400).json({ error: "Invalid session quiz attempt payload" });
+  }
+
+  const nextAttempt = {
+    quizId,
+    quizTitle,
+    sessionId,
+    mode,
+    step,
+    score,
+    total,
+    passed: typeof passed === "boolean" ? passed : score >= Math.ceil(total * 0.6),
+    at: new Date().toISOString(),
+  };
+
+  sessionQuizAttempts[sessionId] = [
+    nextAttempt,
+    ...(sessionQuizAttempts[sessionId] || []).filter((item) => item.quizId !== quizId),
+  ].slice(0, 20);
+
+  return res.status(201).json(nextAttempt);
 });
 
 // ---------------- QUIZ (SESSION + CHAT CONTEXT) ----------------
@@ -462,11 +850,16 @@ Return JSON object with this exact shape:
 Rules:
 - for mode=step: generate exactly 1 focused question from current step and recent doubts
 - for mode=final: generate multi-question universal quiz covering different points learned
+- every question must test a different concept or scenario
+- do not repeat the same question idea with rewording
 - no markdown, no extra text, JSON only
 `;
 
   try {
-    const result = await callGeminiText(prompt);
+    const result = await callAiText({
+      systemPrompt: "You are a precise DSA quiz generator. Return valid JSON only when requested.",
+      userPrompt: prompt,
+    });
     if (!result.ok) {
       return res.json(
         buildFallbackQuiz({
@@ -486,7 +879,13 @@ Rules:
         })
       );
     }
-    return res.json(parsed);
+    return res.json(
+      ensureQuizQuestions(parsed, {
+        count: questionCount,
+        scope: mode === "final" ? "session-final" : "session-step",
+        title: mode === "final" ? `${subtopic.name} Final Quiz` : `${subtopic.name} Step Quiz`,
+      })
+    );
   } catch {
     return res.json(
       buildFallbackQuiz({
@@ -546,11 +945,16 @@ Return JSON object with this exact shape:
 Rules:
 - question set must focus on this subtopic
 - if conversation exists, personalize to doubts
+- every question must test a different concept or scenario
+- do not repeat the same question idea with rewording
 - no markdown, no extra text, JSON only
 `;
 
   try {
-    const result = await callGeminiText(prompt);
+    const result = await callAiText({
+      systemPrompt: "You are a precise DSA quiz generator. Return valid JSON only when requested.",
+      userPrompt: prompt,
+    });
     if (!result.ok) {
       return res.json(buildFallbackQuiz({ title: `${subtopic.name} Quiz`, count, scope: "subtopic-card" }));
     }
@@ -558,9 +962,13 @@ Rules:
     if (!validateQuizShape(parsed)) {
       return res.json(buildFallbackQuiz({ title: `${subtopic.name} Quiz`, count, scope: "subtopic-card" }));
     }
-    parsed.quizId = parsed.quizId || `subtopic-${topicId}-${subtopicId}-${Date.now()}`;
-    parsed.scope = "subtopic-card";
-    return res.json(parsed);
+    return res.json(
+      ensureQuizQuestions(parsed, {
+        count,
+        scope: "subtopic-card",
+        title: `${subtopic.name} Quiz`,
+      })
+    );
   } catch {
     return res.json(buildFallbackQuiz({ title: `${subtopic.name} Quiz`, count, scope: "subtopic-card" }));
   }

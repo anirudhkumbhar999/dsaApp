@@ -93,14 +93,33 @@ function Home() {
         ) : (
           <div className="grid cards-3">
             {topics.map((topic) => (
-              <button
-                key={topic.id}
-                className="card topic-card"
-                onClick={() => navigate(`/learn/${topic.id}`, { state: { topicName: topic.name } })}
-              >
-                <p className="topic-title">{topic.name}</p>
-                <p className="topic-meta">Open main track and continue with subtopics.</p>
-              </button>
+                <div key={topic.id} className="card">
+                  <p className="topic-title">{topic.name}</p>
+                  <p className="topic-meta">Open main track and continue with subtopics.</p>
+                  <div className="action-row topic-card-actions">
+                    <button
+                      className="btn-primary"
+                      type="button"
+                      onClick={() => navigate(`/learn/${topic.id}`, { state: { topicName: topic.name } })}
+                    >
+                      Learn
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      type="button"
+                      onClick={() => navigate(`/problems/topic/${topic.id}`, { state: { topicName: topic.name } })}
+                    >
+                      Problems
+                    </button>
+                    <button
+                      className="btn-secondary"
+                      type="button"
+                      onClick={() => navigate(`/quiz/topic/${topic.id}`, { state: { topicName: topic.name } })}
+                    >
+                      Quiz
+                    </button>
+                  </div>
+                </div>
             ))}
           </div>
         )}
