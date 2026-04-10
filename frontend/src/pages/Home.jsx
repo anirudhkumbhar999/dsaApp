@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { getTopics } from "../services/api";
+import { getGlobalUniqueSolvedCount, subscribeProgress } from "../utils/leetcodeProblemProgress";
 import "./Home.css";
 
 function StatIcon({ path }) {
@@ -15,6 +16,13 @@ function Home() {
   const navigate = useNavigate();
   const [topics, setTopics] = useState([]);
   const [loadingTopics, setLoadingTopics] = useState(true);
+  const [problemsSolvedCount, setProblemsSolvedCount] = useState(0);
+
+  useEffect(() => {
+    const update = () => setProblemsSolvedCount(getGlobalUniqueSolvedCount());
+    update();
+    return subscribeProgress(update);
+  }, []);
 
   useEffect(() => {
     let mounted = true;
@@ -54,8 +62,8 @@ function Home() {
           <div className="stat-head">
             <StatIcon path="M9 3h6l1 2h4v16H4V5h4l1-2zM9 11h6M9 15h6" />
           </div>
-          <p className="stat-label">Problems Solved</p>
-          <p className="stat-value">123</p>
+          <p className="stat-label">Problems marked solved</p>
+          <p className="stat-value">{problemsSolvedCount}</p>
         </div>
         <div className="card">
           <div className="stat-head">

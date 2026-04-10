@@ -96,3 +96,15 @@ export const getSubtopicQuiz = async (topicId, subtopicId, sessionId = "", count
   const res = await fetch(`${BASE_URL}/api/quiz/subtopic/${topicId}/${subtopicId}?${query.toString()}`);
   return res.json();
 };
+
+export const getProblemsTopics = async () => {
+  const res = await fetch(`${BASE_URL}/api/problems/topics`);
+  return res.json();
+};
+
+/** Full free-problem list for a LeetCode topic tag (no client limit; backend returns all). */
+export const getLeetCodeProblemsByCategory = async (slug) => {
+  const enc = encodeURIComponent(slug);
+  const res = await fetch(`${BASE_URL}/api/leetcode/category/${enc}`);
+  return res.json();
+};

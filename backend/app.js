@@ -1,5 +1,6 @@
 const express = require("express");
 const cors = require("cors");
+const leetcodeRoutes = require("./routes/leetcodeRoutes");
 
 const app = express();
 const sessions = {};
@@ -10,6 +11,7 @@ const topicQuizQuestionBank = {};
 
 app.use(cors());
 app.use(express.json());
+app.use("/api/leetcode", leetcodeRoutes);
 
 // ---------------- DATA ----------------
 const subtopicDetails = {
@@ -55,6 +57,137 @@ const subtopicsData = {
     { id: 303, name: "Cycle Detection" },
   ],
 };
+
+const problemsByTopic = {
+  1: [
+    {
+      id: "array-1",
+      title: "Two Sum",
+      slug: "two-sum",
+      difficulty: "Easy",
+      tags: ["arrays", "hash-table"],
+      description: "Find two numbers that add up to target.",
+    },
+    {
+      id: "array-2",
+      title: "Subarray Sum Equals K",
+      slug: "subarray-sum-equals-k",
+      difficulty: "Medium",
+      tags: ["arrays", "prefix-sum"],
+      description: "Count subarrays whose sum equals k.",
+    },
+    {
+      id: "array-3",
+      title: "Merge Intervals",
+      slug: "merge-intervals",
+      difficulty: "Medium",
+      tags: ["arrays", "sorting"],
+      description: "Merge overlapping intervals into consolidated list.",
+    },
+  ],
+  2: [
+    {
+      id: "string-1",
+      title: "Valid Anagram",
+      slug: "valid-anagram",
+      difficulty: "Easy",
+      tags: ["strings", "hash-table"],
+      description: "Check if two strings are anagrams.",
+    },
+    {
+      id: "string-2",
+      title: "Longest Palindromic Substring",
+      slug: "longest-palindromic-substring",
+      difficulty: "Medium",
+      tags: ["strings", "dynamic-programming"],
+      description: "Return the longest palindromic substring in s.",
+    },
+    {
+      id: "string-3",
+      title: "Group Anagrams",
+      slug: "group-anagrams",
+      difficulty: "Medium",
+      tags: ["strings", "hash-table"],
+      description: "Group strings into lists of anagrams.",
+    },
+  ],
+  3: [
+    {
+      id: "linked-1",
+      title: "Reverse Linked List",
+      slug: "reverse-linked-list",
+      difficulty: "Easy",
+      tags: ["linked-list"],
+      description: "Reverse a singly linked list iteratively or recursively.",
+    },
+    {
+      id: "linked-2",
+      title: "Linked List Cycle",
+      slug: "linked-list-cycle",
+      difficulty: "Easy",
+      tags: ["linked-list", "two-pointers"],
+      description: "Detect cycle and return meeting node or entry point.",
+    },
+    {
+      id: "linked-3",
+      title: "Merge Two Sorted Lists",
+      slug: "merge-two-sorted-lists",
+      difficulty: "Easy",
+      tags: ["linked-list"],
+      description: "Merge two sorted linked lists into a single sorted list.",
+    },
+  ],
+};
+
+const solvedProblems = {};
+
+// ---------------- PROBLEMS ----------------
+app.get("/api/problems/topics", (req, res) => {
+  res.json(
+    topicsData.map((topic) => ({
+      topicId: topic.id,
+      name: topic.name,
+    }))
+  );
+});
+
+app.get("/api/problems/topic/:topicId", (req, res) => {
+  const { topicId } = req.params;
+  const topic = topicsData.find((t) => String(t.id) === String(topicId));
+  if (!topic) return res.status(404).json({ error: "Topic not found" });
+
+  const problems = problemsByTopic[topic.id] || [];
+  const solvedForTopic = solvedProblems[String(topic.id)] || new Set();
+
+  res.json({
+    topicId: topic.id,
+    topicName: topic.name,
+    problems: problems.map((problem) => ({
+      ...problem,
+      link: `https://leetcode.com/problems/${problem.slug}/`,
+      solved: solvedForTopic.has(problem.id),
+    })),
+  });
+});
+
+app.post("/api/problems/topic/:topicId/solve", (req, res) => {
+  const { topicId } = req.params;
+  const { problemId } = req.body || {};
+  const topic = topicsData.find((t) => String(t.id) === String(topicId));
+  if (!topic) return res.status(404).json({ error: "Topic not found" });
+  const problem = (problemsByTopic[topic.id] || []).find((item) => item.id === problemId);
+  if (!problem) return res.status(404).json({ error: "Problem not found" });
+
+  const key = String(topic.id);
+  if (!solvedProblems[key]) solvedProblems[key] = new Set();
+  solvedProblems[key].add(problemId);
+
+  res.status(201).json({
+    problemId,
+    topicId: topic.id,
+    solved: true,
+  });
+});
 
 const buildFallbackQuiz = ({ title, count = 5, scope = "general" }) => {
   const size = Math.max(1, Math.min(Number(count) || 5, 10));

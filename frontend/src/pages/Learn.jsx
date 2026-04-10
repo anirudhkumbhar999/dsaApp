@@ -1,6 +1,8 @@
 import { useParams, useNavigate, useLocation } from "react-router-dom";
 import { useEffect, useState } from "react";
 import { getSubtopics, getSubtopicQuiz, startSession } from "../services/api";
+import { useSubtopicBarProgress } from "../hooks/useSubtopicBarProgress";
+import { getRecord } from "../utils/leetcodeProblemProgress";
 
 function Learn() {
   const { topicId } = useParams();
@@ -17,7 +19,7 @@ function Learn() {
   const [quizData, setQuizData] = useState(null);
   const [quizAnswers, setQuizAnswers] = useState({});
   const [quizSubmitted, setQuizSubmitted] = useState(false);
-  const [problemProgress, setProblemProgress] = useState({});
+  const problemProgress = useSubtopicBarProgress(topicId, subtopics);
 
   useEffect(() => {
     try {
@@ -27,27 +29,6 @@ function Learn() {
       setSessionQuizHistory({});
     }
   }, []);
-
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem("subtopicProblemProgress");
-      if (raw) {
-        setProblemProgress(JSON.parse(raw));
-        return;
-      }
-    } catch {
-      // no-op
-    }
-
-    // Temporary mock progress by subtopic until real problem solve tracking is integrated.
-    const generated = {};
-    subtopics.forEach((sub, idx) => {
-      const total = 20;
-      const solved = Math.min(total, (idx + 1) * 3);
-      generated[`${topicId}-${sub.id}`] = { solved, total };
-    });
-    setProblemProgress(generated);
-  }, [subtopics, topicId]);
 
   const openSubtopicQuiz = async (subtopicId) => {
     setOpenQuizSubtopicId(subtopicId);
@@ -162,19 +143,27 @@ function Learn() {
             {subtopics.map((sub) => {
               const key = `${topicId}-${sub.id}`;
               const solved = sessionQuizHistory[key]?.[0];
-              const p = problemProgress[key] || { solved: 0, total: 20 };
-              const progress = p.total > 0 ? Math.round((p.solved / p.total) * 100) : 0;
+              const p = problemProgress[sub.id] || {
+                solved: 0,
+                total: 15,
+                percent: 0,
+                catalogKnown: false,
+              };
+              const barPct = p.catalogKnown ? p.percent : 0;
               return (
                 <div key={sub.id} className="card">
                   <p className="topic-title">{sub.name}</p>
                   <p className="topic-meta">Intuition -> Brute Force -> Optimized -> Patterns -> Code -> Practice</p>
                   <div className="subtopic-progress">
                     <div className="subtopic-progress-top">
-                      <span>Solved Problems</span>
-                      <span>{p.solved}/{p.total} ({progress}%)</span>
+                      <span>Solved / catalog</span>
+                      <span>
+                        {p.solved}/{p.catalogKnown ? p.total : "—"}{" "}
+                        {p.catalogKnown ? `(${p.percent}%)` : "(open Problems)"}
+                      </span>
                     </div>
                     <div className="subtopic-progress-bar">
-                      <div className="subtopic-progress-fill" style={{ width: `${progress}%` }} />
+                      <div className="subtopic-progress-fill" style={{ width: `${barPct}%` }} />
                     </div>
                   </div>
                   {solved ? (
@@ -192,7 +181,15 @@ function Learn() {
                     >
                       {creatingSessionId === sub.id ? "Starting..." : "Tutor"}
                     </button>
-                    <button className="btn-secondary" type="button">
+                    <button
+                      className="btn-secondary"
+                      type="button"
+                      onClick={() =>
+                        navigate(`/problems/topic/${topicId}/subtopic/${sub.id}`, {
+                          state: { topicName, subtopicName: sub.name },
+                        })
+                      }
+                    >
                       Problems
                     </button>
                     <button className="btn-secondary" type="button">
@@ -220,19 +217,48 @@ function Learn() {
               </p>
             </div>
             <div className="card">
-              <p className="topic-title">Solved Problems (Subtopic-wise)</p>
+              <p className="topic-title">Solved problems (local)</p>
               <p className="topic-meta">
-                Empty component for now. We will implement full solved-problems listing and cloud sync later.
+                Marks sync with the Problems page and Tutor tab. Open a slug on LeetCode from the list below.
               </p>
-              <div className="history-list">
+              <div className="learn-solved-by-subtopic">
                 {subtopics.map((sub) => {
-                  const key = `${topicId}-${sub.id}`;
-                  const p = problemProgress[key] || { solved: 0, total: 20 };
-                  const progress = p.total > 0 ? Math.round((p.solved / p.total) * 100) : 0;
+                  const rec = getRecord(topicId, sub.id);
+                  const slugs = rec.solvedSlugs.slice(0, 8);
                   return (
-                    <div key={`p-${sub.id}`} className="history-item">
-                      <span>{sub.name}</span>
-                      <span>{p.solved}/{p.total} ({progress}%)</span>
+                    <div key={`p-${sub.id}`} className="learn-solved-block">
+                      <div className="learn-solved-block-head">
+                        <span>{sub.name}</span>
+                        <button
+                          type="button"
+                          className="btn-secondary btn-compact"
+                          onClick={() =>
+                            navigate(`/problems/topic/${topicId}/subtopic/${sub.id}`, {
+                              state: { topicName, subtopicName: sub.name },
+                            })
+                          }
+                        >
+                          Open bank
+                        </button>
+                      </div>
+                      {slugs.length === 0 ? (
+                        <p className="topic-meta learn-solved-empty">No problems marked yet.</p>
+                      ) : (
+                        <ul className="learn-solved-slugs">
+                          {slugs.map((slug) => (
+                            <li key={slug}>
+                              <a
+                                href={`https://leetcode.com/problems/${slug}/`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="learn-solved-link"
+                              >
+                                {slug.replace(/-/g, " ")}
+                              </a>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
                   );
                 })}

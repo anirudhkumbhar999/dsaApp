@@ -174,7 +174,9 @@ function Tutor() {
               </>
             )}
 
-            {activeTab === "problems" && <Problems />}
+            {activeTab === "problems" && (
+              <Problems topicId={topicId} subtopicId={subtopicId} subtopicName={subtopicName} />
+            )}
             {activeTab === "compiler" && <Compiler />}
             {activeTab === "quiz" && (
               <Quiz sessionId={sessionId} topicId={topicId} subtopicId={subtopicId} />
